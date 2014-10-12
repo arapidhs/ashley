@@ -26,7 +26,7 @@ ext {
 /** needed to disable Java 8 doclint which throws errors **/
 allprojects {
     tasks.withType(Javadoc) {
-        options.addStringOption('Xdoclint:none', '-quiet')
+        //options.addStringOption('Xdoclint:none', '-quiet')
     }
 }
 
