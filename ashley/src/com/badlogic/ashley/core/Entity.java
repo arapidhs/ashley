@@ -30,7 +30,7 @@ import com.badlogic.gdx.utils.Bits;
  * @author Stefan Bachmann
  */
 public class Entity {
-	private static int nextIndex;
+	private static long nextId;
 	
 	/** A flag that can be used to bit mask this entity. Up to the user to manage. */
 	public int flags;
@@ -39,8 +39,8 @@ public class Entity {
 	/** Will dispatch an event when a component is removed. */
 	public final Signal<Entity> componentRemoved;
 	
-	/** Unique entity index for fast retrieval */
-	private int index;
+	/** Unique entity id */
+	protected Long uuid;
 	/** A collection that holds all the components indexed by their {@link ComponentType} index */
 	private Bag<Component> components;
 	/** An auxiliary array for user access to all the components of an entity */
@@ -65,17 +65,17 @@ public class Entity {
 		familyBits = new Bits();
 		flags = 0;
 		
-		index = nextIndex++;
+		uuid = new Long(nextId++);
 		
 		componentAdded = new Signal<Entity>();
 		componentRemoved = new Signal<Entity>();
 	}
 	
 	/**
-	 * @return The Entity's unique index.
+	 * @return The Entity's unique id.
 	 */
-	public int getIndex(){
-		return index;
+	public long getId(){
+		return uuid;
 	}
 	
 	/**
@@ -223,7 +223,7 @@ public class Entity {
 	
 	@Override
 	public int hashCode() {
-		return index;
+		return uuid.hashCode();
 	}
 
 	@Override
@@ -235,6 +235,6 @@ public class Entity {
 		if (!(obj instanceof Entity))
 			return false;
 		Entity other = (Entity) obj;
-        return index == other.index;
+        return uuid.equals(other.uuid);
     }
 }
