@@ -71,7 +71,7 @@ public class Engine {
 	private final Listener<Entity> componentRemoved;
 	
 	/** Whether or not the engine is ticking */
-	private boolean updating;
+	protected boolean updating;
 	
 	/** Mechanism to delay component addition/removal to avoid affecting system processing */
 	private ComponentOperationPool componentOperationsPool;
@@ -268,7 +268,7 @@ public class Engine {
 		}
 	}
 	
-	private void removePendingEntities() {
+	protected void removePendingEntities() {
 		int numPending = pendingRemovalEntities.size;
 		
 		for (int i = 0; i < numPending; ++i) {
@@ -351,7 +351,7 @@ public class Engine {
 		return entities;
 	}
 	
-	private void processComponentOperations() {
+	protected void processComponentOperations() {
 		int numOperations = componentOperations.size;
 		
 		for (int i = 0; i < numOperations; ++i) {
