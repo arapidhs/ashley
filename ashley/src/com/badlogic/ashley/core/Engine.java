@@ -48,8 +48,10 @@ public class Engine {
 	
 	/** An unordered array that holds all entities in the Engine */
 	private Array<Entity> entities;
-	/** An unoredered array that keeps track of entities pending removal for safe in-loop removal */
-	private Array<Entity> pendingRemovalEntities;
+	/** An unoredered array that keeps track of entities pending operations for safe in-loop removal */
+	private Array<EntityOperation> entityOperations;
+	/** Pool of entity operations */
+	private EntityOperationPool entityOperationPool;
 	/** An unordered list of EntitySystem */
 	private Array<EntitySystem> systems;
 	/** An unordered and immutable list of EntitySystem */
@@ -73,6 +75,8 @@ public class Engine {
 	/** Whether or not the engine is ticking */
 	protected boolean updating;
 	
+	private boolean notifying;
+	
 	/** Mechanism to delay component addition/removal to avoid affecting system processing */
 	private ComponentOperationPool componentOperationsPool;
  	private Array<ComponentOperation> componentOperations;
@@ -80,7 +84,8 @@ public class Engine {
 	
 	public Engine(){
 		entities = new Array<Entity>(false, 16);
-		pendingRemovalEntities = new Array<Entity>(false, 16);
+		entityOperations = new Array<EntityOperation>(false, 16);
+		entityOperationPool = new EntityOperationPool();
 		systems = new Array<EntitySystem>(false, 16);
 		immutableSystems = new ImmutableArray<EntitySystem>(systems);
 		systemsByClass = new ObjectMap<Class<?>, EntitySystem>();
@@ -93,6 +98,7 @@ public class Engine {
 		componentRemoved = new ComponentListener(this);
 		
 		updating = false;
+		notifying = false;
 		
 		componentOperationsPool = new ComponentOperationPool();
 		componentOperations = new Array<ComponentOperation>();
@@ -103,28 +109,26 @@ public class Engine {
 	 * Adds an entity to this Engine.
 	 */
 	public void addEntity(Entity entity){
-		entities.add(entity);
-		
-		updateFamilyMembership(entity);
-		
-		entity.componentAdded.add(componentAdded);
-		entity.componentRemoved.add(componentRemoved);
-		entity.componentOperationHandler = componentOperationHandler;
-		
-		Object[] items = listeners.begin();
-		for (int i = 0, n = listeners.size; i < n; i++) {
-			EntityListener listener = (EntityListener)items[i];
-			listener.entityAdded(entity);
+		if (notifying) {
+			EntityOperation operation = entityOperationPool.obtain();
+			operation.entity = entity;
+			operation.type = EntityOperation.Type.Add;
+			entityOperations.add(operation);
 		}
-		listeners.end();		
+		else {
+			addEntityInternal(entity);
+		}
 	}
 	
 	/**
 	 * Removes an entity from this Engine.
 	 */
 	public void removeEntity(Entity entity){
-		if (updating) {
-			pendingRemovalEntities.add(entity);
+		if (updating || notifying) {
+			EntityOperation operation = entityOperationPool.obtain();
+			operation.entity = entity;
+			operation.type = EntityOperation.Type.Remove;
+			entityOperations.add(operation);
 		}
 		else {
 			removeEntityInternal(entity);
@@ -184,8 +188,7 @@ public class Engine {
 	 * Returns immutable collection of entities for the specified {@link Family}. Will return the same instance every time.
 	 */
 	public ImmutableArray<Entity> getEntitiesFor(Family family){
-		registerFamily(family);
-		return immutableFamilies.get(family);
+		return registerFamily(family);
 	}
 	
 	/**
@@ -232,12 +235,13 @@ public class Engine {
 	public void update(float deltaTime){
 		updating = true;
 		for(int i=0; i<systems.size; i++){
-            if (systems.get(i).checkProcessing()) {
-                systems.get(i).update(deltaTime);
-            }
-            
-            processComponentOperations();
-            removePendingEntities();
+			EntitySystem system = systems.get(i);
+			if (system.checkProcessing()) {
+				system.update(deltaTime);
+			}
+			
+			processComponentOperations();
+			processPendingEntityOperations();
 		}
 		
 		updating = false;
@@ -268,16 +272,6 @@ public class Engine {
 		}
 	}
 	
-	protected void removePendingEntities() {
-		int numPending = pendingRemovalEntities.size;
-		
-		for (int i = 0; i < numPending; ++i) {
-			removeEntityInternal(pendingRemovalEntities.get(i));
-		}
-		
-		pendingRemovalEntities.clear();
-	}
-	
 	protected void removeEntityInternal(Entity entity) {
 		entities.removeValue(entity, true);
 		
@@ -298,24 +292,49 @@ public class Engine {
 		entity.componentRemoved.remove(componentRemoved);
 		entity.componentOperationHandler = null;
 		
+		notifying = true;
 		Object[] items = listeners.begin();
 		for (int i = 0, n = listeners.size; i < n; i++) {
 			EntityListener listener = (EntityListener)items[i];
 			listener.entityRemoved(entity);
 		}
 		listeners.end();
+		notifying = false;
+		processPendingEntityOperations();
+	}
+	
+	protected void addEntityInternal(Entity entity) {
+		entities.add(entity);
+		
+		updateFamilyMembership(entity);
+		
+		entity.componentAdded.add(componentAdded);
+		entity.componentRemoved.add(componentRemoved);
+		entity.componentOperationHandler = componentOperationHandler;
+		
+		notifying = true;
+		Object[] items = listeners.begin();
+		for (int i = 0, n = listeners.size; i < n; i++) {
+			EntityListener listener = (EntityListener)items[i];
+			listener.entityAdded(entity);
+		}
+		listeners.end();
+		notifying = false;
+		processPendingEntityOperations();
 	}
 	
 	private void notifyFamilyListenersAdd(Family family, Entity entity) {
 		SnapshotArray<EntityListener> listeners = familyListeners.get(family);
 		
 		if (listeners != null) {
+			notifying = true;
 			Object[] items = listeners.begin();
 			for (int i = 0, n = listeners.size; i < n; i++) {
 				EntityListener listener = (EntityListener)items[i];
 				listener.entityAdded(entity);
 			}
-			listeners.end();	
+			listeners.end();
+			notifying = false;
 		}
 	}
 	
@@ -323,22 +342,25 @@ public class Engine {
 		SnapshotArray<EntityListener> listeners = familyListeners.get(family);
 		
 		if (listeners != null) {
+			notifying = true;
 			Object[] items = listeners.begin();
 			for (int i = 0, n = listeners.size; i < n; i++) {
 				EntityListener listener = (EntityListener)items[i];
 				listener.entityRemoved(entity);
 			}
-			listeners.end();	
+			listeners.end();
+			notifying = false;
 		}
 	}
 	
-	private Array<Entity> registerFamily(Family family) {
-		Array<Entity> entities = families.get(family);
+	private ImmutableArray<Entity> registerFamily(Family family) {
+		ImmutableArray<Entity> immutableEntities = immutableFamilies.get(family);
 		
-		if (entities == null) {
-			entities = new Array<Entity>(false, 16);
+		if (immutableEntities == null) {
+			Array<Entity> entities = new Array<Entity>(false, 16);
+			immutableEntities = new ImmutableArray<Entity>(entities);
 			families.put(family, entities);
-			immutableFamilies.put(family, new ImmutableArray<Entity>(entities));
+			immutableFamilies.put(family, immutableEntities);
 			
 			for(Entity e : this.entities){
 				if(family.matches(e)) {
@@ -348,7 +370,22 @@ public class Engine {
 			}
 		}
 		
-		return entities;
+		return immutableEntities;
+	}
+	
+	protected void processPendingEntityOperations() {
+		while (entityOperations.size > 0) {
+			EntityOperation operation = entityOperations.removeIndex(entityOperations.size - 1);
+			
+			switch(operation.type) {
+				case Add: addEntityInternal(operation.entity); break;
+				case Remove: removeEntityInternal(operation.entity); break;
+			}
+			
+			entityOperationPool.free(operation);
+		}
+		
+		entityOperations.clear();
 	}
 	
 	protected void processComponentOperations() {
@@ -357,11 +394,9 @@ public class Engine {
 		for (int i = 0; i < numOperations; ++i) {
 			ComponentOperation operation = componentOperations.get(i);
 			
-			if (operation.type == ComponentOperation.Type.Add) {
-				operation.entity.addInternal(operation.component);
-			}
-			else if (operation.type == ComponentOperation.Type.Remove) {
-				operation.entity.removeInternal(operation.componentClass);
+			switch(operation.type) {
+				case Add: operation.entity.addInternal(operation.component); break;
+				case Remove: operation.entity.removeInternal(operation.componentClass); break;
 			}
 			
 			componentOperationsPool.free(operation);
@@ -376,7 +411,6 @@ public class Engine {
 		public ComponentListener(Engine engine) {
 			this.engine = engine;
 		}
-		
 		
 		@Override
 		public void receive(Signal<Entity> signal, Entity object) {
@@ -452,5 +486,22 @@ public class Engine {
 		public int compare(EntitySystem a, EntitySystem b) {
 			return a.priority > b.priority ? 1 : (a.priority == b.priority) ? 0 : -1;
 		}
+	}
+	
+	private static class EntityOperation {
+		public enum Type {
+			Add,
+			Remove,
+		}
+		
+		public Type type;
+		public Entity entity;
+	}
+	
+	private static class EntityOperationPool extends Pool<EntityOperation> {
+		@Override
+		protected EntityOperation newObject() {
+			return new EntityOperation();
+		}		
 	}
 }
