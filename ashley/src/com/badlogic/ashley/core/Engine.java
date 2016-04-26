@@ -22,6 +22,7 @@ import com.badlogic.ashley.signals.Listener;
 import com.badlogic.ashley.signals.Signal;
 import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.LongMap;
 import com.badlogic.gdx.utils.ObjectMap;
 import com.badlogic.gdx.utils.ObjectMap.Entry;
 import com.badlogic.gdx.utils.Pool;
@@ -46,36 +47,31 @@ import com.badlogic.gdx.utils.SnapshotArray;
 public class Engine {
 	private static SystemComparator comparator = new SystemComparator();
 	
-	/** An unordered array that holds all entities in the Engine */
 	private Array<Entity> entities;
-	/** An unoredered array that keeps track of entities pending operations for safe in-loop removal */
+	private ImmutableArray<Entity> immutableEntities;
+	private LongMap<Entity> entitiesById;
+	
 	private Array<EntityOperation> entityOperations;
-	/** Pool of entity operations */
 	private EntityOperationPool entityOperationPool;
-	/** An unordered list of EntitySystem */
+	
 	private Array<EntitySystem> systems;
-	/** An unordered and immutable list of EntitySystem */
 	private ImmutableArray<EntitySystem> immutableSystems;
-	/** A hashmap that organises EntitySystems by class for easy retrieval */
 	private ObjectMap<Class<?>, EntitySystem> systemsByClass;
-	/** A hashmap that organises all entities into family buckets */
+	
 	private ObjectMap<Family, Array<Entity>> families;
-	/** A hashmap that organises all entities into immutable family buckets */
 	private ObjectMap<Family, ImmutableArray<Entity>> immutableFamilies;
-	/** A collection of entity added/removed event listeners */
+	
 	private SnapshotArray<EntityListener> listeners;
-	/** Entity added/removed event listeners per family */
 	private ObjectMap<Family,SnapshotArray<EntityListener>> familyListeners;
 	
-	/** A listener for the Engine that's called every time a component is added. */
 	private final Listener<Entity> componentAdded;
-	/** A listener for the Engine that's called every time a component is removed. */
 	private final Listener<Entity> componentRemoved;
 	
 	/** Whether or not the engine is ticking */
 	protected boolean updating;
 	
 	private boolean notifying;
+	private long nextEntityId = 1;
 	
 	/** Mechanism to delay component addition/removal to avoid affecting system processing */
 	private ComponentOperationPool componentOperationsPool;
@@ -84,6 +80,8 @@ public class Engine {
 	
 	public Engine(){
 		entities = new Array<Entity>(false, 16);
+		immutableEntities = new ImmutableArray<Entity>(entities);
+		entitiesById = new LongMap<Entity>();
 		entityOperations = new Array<EntityOperation>(false, 16);
 		entityOperationPool = new EntityOperationPool();
 		systems = new Array<EntitySystem>(false, 16);
@@ -105,11 +103,16 @@ public class Engine {
 		componentOperationHandler = new ComponentOperationHandler(this);
 	}
 	
+	private long obtainEntityId() {
+		return nextEntityId++;
+	}
+	
 	/**
 	 * Adds an entity to this Engine.
 	 */
 	public void addEntity(Entity entity){
-		if (notifying) {
+		entity.uuid = obtainEntityId();
+		if (updating || notifying) {
 			EntityOperation operation = entityOperationPool.obtain();
 			operation.entity = entity;
 			operation.type = EntityOperation.Type.Add;
@@ -125,6 +128,10 @@ public class Engine {
 	 */
 	public void removeEntity(Entity entity){
 		if (updating || notifying) {
+			if(entity.scheduledForRemoval) {
+				return;
+			}
+			entity.scheduledForRemoval = true;
 			EntityOperation operation = entityOperationPool.obtain();
 			operation.entity = entity;
 			operation.type = EntityOperation.Type.Remove;
@@ -139,9 +146,27 @@ public class Engine {
 	 * Removes all entities registered with this Engine.
 	 */
 	public void removeAllEntities() {
-		while(entities.size > 0) {
-			removeEntity(entities.first());
+		if (updating || notifying) {
+			for(Entity entity: entities) {
+				entity.scheduledForRemoval = true;
+			}
+			EntityOperation operation = entityOperationPool.obtain();
+			operation.type = EntityOperation.Type.RemoveAll;
+			entityOperations.add(operation);
 		}
+		else {
+			while(entities.size > 0) {
+				removeEntity(entities.first());
+			}
+		}
+	}
+	
+	public Entity getEntity(long id) {
+		return entitiesById.get(id);
+	}
+	
+	public ImmutableArray<Entity> getEntities() {
+		return immutableEntities;
 	}
 	
 	/**
@@ -250,7 +275,7 @@ public class Engine {
 	private void updateFamilyMembership(Entity entity){
 		for (Entry<Family, Array<Entity>> entry : families.entries()) {
 			Family family = entry.key;
-			Array<Entity> entities = entry.value;
+			Array<Entity> familyEntities = entry.value;
 			int familyIndex = family.getIndex();
 			
 			
@@ -258,13 +283,13 @@ public class Engine {
 			boolean matches = family.matches(entity);
 			
 			if (!belongsToFamily && matches) {
-				entities.add(entity);
+				familyEntities.add(entity);
 				entity.getFamilyBits().set(familyIndex);
 				
 				notifyFamilyListenersAdd(family, entity);
 			}
 			else if (belongsToFamily && !matches) {
-				entities.removeValue(entity, true);
+				familyEntities.removeValue(entity, true);
 				entity.getFamilyBits().clear(familyIndex);
 				
 				notifyFamilyListenersRemove(family, entity);
@@ -273,15 +298,17 @@ public class Engine {
 	}
 	
 	protected void removeEntityInternal(Entity entity) {
+		entity.scheduledForRemoval = false;
 		entities.removeValue(entity, true);
+		entitiesById.remove(entity.getId());
 		
 		if(!entity.getFamilyBits().isEmpty()){
 			for (Entry<Family, Array<Entity>> entry : families.entries()) {
 				Family family = entry.key;
-				Array<Entity> entities = entry.value;
+				Array<Entity> familyEntities = entry.value;
 				
 				if(family.matches(entity)){
-					entities.removeValue(entity, true);
+					familyEntities.removeValue(entity, true);
 					entity.getFamilyBits().clear(family.getIndex());
 					notifyFamilyListenersRemove(family, entity);
 				}
@@ -300,11 +327,11 @@ public class Engine {
 		}
 		listeners.end();
 		notifying = false;
-		processPendingEntityOperations();
 	}
 	
 	protected void addEntityInternal(Entity entity) {
 		entities.add(entity);
+		entitiesById.put(entity.getId(), entity);
 		
 		updateFamilyMembership(entity);
 		
@@ -320,7 +347,6 @@ public class Engine {
 		}
 		listeners.end();
 		notifying = false;
-		processPendingEntityOperations();
 	}
 	
 	private void notifyFamilyListenersAdd(Family family, Entity entity) {
@@ -357,14 +383,14 @@ public class Engine {
 		ImmutableArray<Entity> immutableEntities = immutableFamilies.get(family);
 		
 		if (immutableEntities == null) {
-			Array<Entity> entities = new Array<Entity>(false, 16);
-			immutableEntities = new ImmutableArray<Entity>(entities);
-			families.put(family, entities);
+			Array<Entity> familyEntities = new Array<Entity>(false, 16);
+			immutableEntities = new ImmutableArray<Entity>(familyEntities);
+			families.put(family, familyEntities);
 			immutableFamilies.put(family, immutableEntities);
 			
 			for(Entity e : this.entities){
 				if(family.matches(e)) {
-					entities.add(e);
+					familyEntities.add(e);
 					e.getFamilyBits().set(family.getIndex());
 				}
 			}
@@ -380,6 +406,11 @@ public class Engine {
 			switch(operation.type) {
 				case Add: addEntityInternal(operation.entity); break;
 				case Remove: removeEntityInternal(operation.entity); break;
+				case RemoveAll:
+					while(entities.size > 0) {
+						removeEntityInternal(entities.first());
+					}
+					break;
 			}
 			
 			entityOperationPool.free(operation);
@@ -389,9 +420,8 @@ public class Engine {
 	}
 	
 	protected void processComponentOperations() {
-		int numOperations = componentOperations.size;
+		for (int i = 0; i < componentOperations.size; ++i) {
 		
-		for (int i = 0; i < numOperations; ++i) {
 			ComponentOperation operation = componentOperations.get(i);
 			
 			switch(operation.type) {
@@ -448,7 +478,7 @@ public class Engine {
 		}
 	}
 	
-	private static class ComponentOperation {
+	private static class ComponentOperation implements Pool.Poolable {
 		public enum Type {
 			Add,
 			Remove,
@@ -472,6 +502,12 @@ public class Engine {
 			this.component = null;
 			this.componentClass = componentClass;
 		}
+
+		@Override
+		public void reset() {
+			entity = null;
+			component = null;
+		}
 	}
 	
 	private static class ComponentOperationPool extends Pool<ComponentOperation> {
@@ -488,14 +524,20 @@ public class Engine {
 		}
 	}
 	
-	private static class EntityOperation {
+	private static class EntityOperation implements Pool.Poolable {
 		public enum Type {
 			Add,
 			Remove,
+			RemoveAll
 		}
 		
 		public Type type;
 		public Entity entity;
+
+		@Override
+		public void reset() {
+			entity = null;
+		}
 	}
 	
 	private static class EntityOperationPool extends Pool<EntityOperation> {
