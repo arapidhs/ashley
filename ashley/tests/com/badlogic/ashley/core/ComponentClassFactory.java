@@ -1,8 +1,8 @@
 package com.badlogic.ashley.core;
 
-import org.mockito.asm.ClassWriter;
-import org.mockito.asm.MethodVisitor;
-import org.mockito.asm.Opcodes;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 /**
  * Class loader allowing dynamic {@link Component} class definitions.
