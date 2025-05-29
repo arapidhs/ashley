@@ -60,10 +60,19 @@ public class PooledEngine extends Engine {
 		componentPools = new ComponentPools(componentPoolInitialSize, componentPoolMaxSize);
 	}
 
+	public PooledEngine (int initialEntitiesCapacity, float loadFactor, int entityPoolInitialSize, int entityPoolMaxSize, int componentPoolInitialSize, int componentPoolMaxSize) {
+		super(initialEntitiesCapacity, loadFactor);
+
+		entityPool = new EntityPool(entityPoolInitialSize, entityPoolMaxSize);
+		componentPools = new ComponentPools(componentPoolInitialSize, componentPoolMaxSize);
+	}
+
 	/** @return Clean {@link Entity} from the Engine pool. In order to add it to the {@link Engine}, use {@link #addEntity(Entity)}. @{@link Override {@link Engine#createEntity()}} */
 	@Override
 	public Entity createEntity () {
-		return entityPool.obtain();
+		PooledEntity entity = entityPool.obtain();
+		entity.id = generateEntityId();
+		return entity;
 	}
 
 	/**
@@ -108,6 +117,7 @@ public class PooledEngine extends Engine {
 		@Override
 		public void reset () {
 			removeAll();
+			id = 0L;
 			flags = 0;
 			componentAdded.removeAllListeners();
 			componentRemoved.removeAllListeners();

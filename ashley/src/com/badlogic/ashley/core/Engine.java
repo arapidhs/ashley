@@ -24,6 +24,8 @@ import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.utils.reflect.ClassReflection;
 import com.badlogic.gdx.utils.reflect.ReflectionException;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * The heart of the Entity framework. It is responsible for keeping track of {@link Entity} and
  * managing {@link EntitySystem} objects. The Engine should be updated every tick via the {@link #update(float)} method.
@@ -41,16 +43,30 @@ import com.badlogic.gdx.utils.reflect.ReflectionException;
  * @author Stefan Bachmann
  */
 public class Engine {
+	private static final AtomicLong idGenerator = new AtomicLong(1);
 	private static Family empty = Family.all().get();
 	
 	private final Listener<Entity> componentAdded = new ComponentListener();
 	private final Listener<Entity> componentRemoved = new ComponentListener();
 	
 	private SystemManager systemManager = new SystemManager(new EngineSystemListener());
-	private EntityManager entityManager = new EntityManager(new EngineEntityListener());
+	private EntityManager entityManager;
 	private ComponentOperationHandler componentOperationHandler = new ComponentOperationHandler(new EngineDelayedInformer());
-	private FamilyManager familyManager = new FamilyManager(entityManager.getEntities());	
+	private FamilyManager familyManager;
 	private boolean updating;
+
+	public Engine() {
+		this(0,0f);
+	}
+
+	public Engine(int initialEntitiesCapacity, float loadFactor) {
+		entityManager = new EntityManager(new EngineEntityListener(), initialEntitiesCapacity, loadFactor);
+		familyManager = new FamilyManager(entityManager.getEntities());
+	}
+
+	public Entity getEntity(long id) {
+		return entityManager.getEntity(id);
+	}
 
 	/**
 	 * Creates a new Entity object.
@@ -58,7 +74,13 @@ public class Engine {
 	 */
 
 	public Entity createEntity () {
-		return new Entity();
+		Entity entity = new Entity();
+		entity.id = generateEntityId();
+		return entity;
+	}
+
+	public long generateEntityId() {
+		return idGenerator.incrementAndGet();
 	}
 
 	/**
@@ -238,19 +260,29 @@ public class Engine {
 				
 				if (system.checkProcessing()) {
 					system.update(deltaTime);
+
 				}
-	
-				while(componentOperationHandler.hasOperationsToProcess() || entityManager.hasPendingOperations()) {
-					componentOperationHandler.processOperations();
-					entityManager.processPendingOperations();
-				}
+
+				processPendingOperations();
 			}
 		}
 		finally {
 			updating = false;
 		}	
 	}
-	
+
+	/**
+	 * Processes all pending component and entity operations.
+	 * This ensures that any queued operations are executed, such as adding or removing components or entities,
+	 * until there are no more operations left to process.
+	 */
+	public void processPendingOperations() {
+		while(componentOperationHandler.hasOperationsToProcess() || entityManager.hasPendingOperations()) {
+			componentOperationHandler.processOperations();
+			entityManager.processPendingOperations();
+		}
+	}
+
 	protected void addEntityInternal(Entity entity) {
 		entity.componentAdded.add(componentAdded);
 		entity.componentRemoved.add(componentRemoved);
@@ -266,7 +298,15 @@ public class Engine {
 		entity.componentRemoved.remove(componentRemoved);
 		entity.componentOperationHandler = null;
 	}
-	
+
+	public boolean isUpdating() {
+		return updating;
+	}
+
+	public void setUpdating(boolean updating) {
+		this.updating = updating;
+	}
+
 	private class ComponentListener implements Listener<Entity> {
 		@Override
 		public void receive(Signal<Entity> signal, Entity object) {

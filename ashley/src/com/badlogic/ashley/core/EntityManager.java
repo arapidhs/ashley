@@ -3,11 +3,15 @@ package com.badlogic.ashley.core;
 
 import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.LongMap;
 import com.badlogic.gdx.utils.ObjectSet;
 import com.badlogic.gdx.utils.Pool;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 class EntityManager {
 	private EntityListener listener;
+	private LongMap<Entity> entitiesById;
 	private Array<Entity> entities = new Array<Entity>(false, 16);
 	private ObjectSet<Entity> entitySet = new ObjectSet<Entity>();
 	private ImmutableArray<Entity> immutableEntities = new ImmutableArray<Entity>(entities);
@@ -15,15 +19,25 @@ class EntityManager {
 	private EntityOperationPool entityOperationPool = new EntityOperationPool();
 	
 	public EntityManager(EntityListener listener) {
-		this.listener = listener;
+		this(listener,0,0f);
 	}
-	
+
+	public EntityManager(EntityListener listener, int initialCapacity, float loadFactor) {
+		this.listener = listener;
+		if ( initialCapacity > 0 && loadFactor > 0f ) {
+			this.entitiesById = new LongMap<>(initialCapacity, loadFactor);
+		} else {
+			this.entitiesById = new LongMap<>();
+		}
+	}
+
 	public void addEntity(Entity entity){
 		addEntity(entity, false);
 	}
 	
 	public void addEntity(Entity entity, boolean delayed){
 		entity.scheduledForRemoval = false;
+
 		if (delayed) {
 			EntityOperation operation = entityOperationPool.obtain();
 			operation.entity = entity;
@@ -87,7 +101,11 @@ class EntityManager {
 	public ImmutableArray<Entity> getEntities() {
 		return immutableEntities;
 	}
-	
+
+	public Entity getEntity(long id) {
+		return entitiesById.get(id);
+	}
+
 	public boolean hasPendingOperations() {
 		return pendingOperations.size > 0;
 	}
@@ -123,6 +141,9 @@ class EntityManager {
 			entities.removeValue(entity, true);
 			listener.entityRemoved(entity);
 			entity.removing = false;
+			if (entitiesById.remove(entity.id) == entity) {
+				entity.id = 0L;
+			}
 		}
 	}
 
@@ -133,7 +154,7 @@ class EntityManager {
 
 		entities.add(entity);
 		entitySet.add(entity);
-
+		entitiesById.put(entity.id, entity);
 		listener.entityAdded(entity);
 	}
 

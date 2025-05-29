@@ -27,6 +27,8 @@ import com.badlogic.gdx.utils.Bits;
  * @author Stefan Bachmann
  */
 public class Entity {
+	/** A unique id of the entity **/
+	public long id;
 	/** A flag that can be used to bit mask this entity. Up to the user to manage. */
 	public int flags;
 	/** Will dispatch an event when a component is added. */
