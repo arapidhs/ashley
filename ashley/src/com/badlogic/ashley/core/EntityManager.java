@@ -52,7 +52,14 @@ class EntityManager {
 	public void removeEntity(Entity entity){
 		removeEntity(entity, false);
 	}
-	
+
+	public void removeEntity(long entityId){
+		Entity entity = getEntity(entityId);
+		if (entity != null ) {
+			removeEntity(entity);
+		}
+	}
+
 	public void removeEntity(Entity entity, boolean delayed){
 		if (delayed) {
 			if(entity.scheduledForRemoval) {
